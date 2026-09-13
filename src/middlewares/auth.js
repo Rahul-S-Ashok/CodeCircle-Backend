@@ -3,70 +3,61 @@ const User = require("../models/user");
 
 const userAuth = async (req, res, next) => {
   try {
-    // 1️⃣ Read token from cookies
-    const { token } = req.cookies;
+    const token = req.cookies?.token;
 
     if (!token) {
-      return res.status(401).send("Please login!!!");
+      return res.status(401).json({
+        message: "Please login to continue.",
+      });
     }
 
-    // 2️⃣ Verify token
-    const decodedObj = jwt.verify(token, process.env.JWT_SECRET);
+    if (!process.env.JWT_SECRET) {
+      console.error("JWT_SECRET is not configured.");
+      return res.status(500).json({
+        message: "Server authentication is not configured.",
+      });
+    }
 
-    const { _id } = decodedObj;
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
-    // 3️⃣ Find user from DB
-    const user = await User.findById(_id);
+    if (!decoded?._id) {
+      return res.status(401).json({
+        message: "Invalid authentication token.",
+      });
+    }
+
+    const user = await User.findById(decoded._id);
+
     if (!user) {
-      return res.status(401).send("User not found");
+      return res.status(401).json({
+        message: "User account no longer exists.",
+      });
     }
 
-    // 4️⃣ Attach user to request
     req.user = user;
+
     next();
   } catch (err) {
-    return res.status(401).send("ERROR: " + err.message);
+    if (err.name === "TokenExpiredError") {
+      return res.status(401).json({
+        message: "Your session has expired. Please login again.",
+      });
+    }
+
+    if (err.name === "JsonWebTokenError") {
+      return res.status(401).json({
+        message: "Invalid authentication token.",
+      });
+    }
+
+    console.error("Authentication error:", err);
+
+    return res.status(401).json({
+      message: "Authentication failed.",
+    });
   }
 };
 
 module.exports = {
   userAuth,
 };
-
-
-
-
-
-
-// const jwt=require("jsonwebtoken");
-// const User=require("../models/user");
-// const userAuth= async (req, res, next) => {
-//     //read the token from the req cookies
-//     try{
-//     const {token}=req.cookies;
-//     if(!token){
-//         return res.status(401).send("Please login!!!");
-//     }
-
-//     const decodedObj=await jwt.verify(token,"DEV@TINDER$1290");
-
-//     const {_id}=decodedObj;
-
-//     const user=await User.findById(_id);
-//     if(!user){
-//         throw new Error("user not found");
-//     }
-//     req.user=user;
-//     next();
-//     }catch(err){
-//     res.status(400).send("ERROR:" +err.message);
-//     }
-//  }
-   
-//     //validate the token
-//     //find the user  
-
-
-// module.exports={
-//     userAuth,
-// }

@@ -1,147 +1,244 @@
 const express = require("express");
-const requestRouter = express.Router();
-const User = require("../models/user");
-const { userAuth } = require("../middlewares/auth");
-const ConnectionRequest = require("../models/connectionRequest");
+const mongoose = require("mongoose");
 
-const sendEmail= require("../utils/sendEmail");
-// ======================= SEND REQUEST =======================
-// Status: interested | ignored
-requestRouter.post(
+const User = require("../models/user");
+const ConnectionRequest = require("../models/connectionRequest");
+const { userAuth } = require("../middlewares/auth");
+
+const router = express.Router();
+
+const FREE_DAILY_LIMIT = 20;
+const SILVER_DAILY_LIMIT = 100;
+
+/* -------------------------------------------------------
+   POST /request/send/:status/:toUserId
+------------------------------------------------------- */
+
+router.post(
   "/send/:status/:toUserId",
   userAuth,
   async (req, res) => {
     try {
-      const fromUserId = req.user._id;
-      const toUserId = req.params.toUserId;
-      const status = req.params.status;
-  
-      let dailyLimit = Infinity;
+      const { status, toUserId } = req.params;
 
-      if (!req.user.isPremium) {
-        dailyLimit = 20; // Free users
-      } else if (req.user.membershipType === "silver") {
-        dailyLimit = 100; // Silver users
-      }
-      // Gold users remain Infinity (unlimited)
+      /* ---------------------------------------------
+         Validate status
+      --------------------------------------------- */
 
-      if (status === "interested" && dailyLimit !== Infinity) {
-        const startOfDay = new Date();
-        startOfDay.setHours(0, 0, 0, 0);
-
-        const requestsToday = await ConnectionRequest.countDocuments({
-          fromUserId,
-          status: "interested",
-          createdAt: { $gte: startOfDay },
+      if (!["interested", "ignored"].includes(status)) {
+        return res.status(400).json({
+          message: "Invalid connection action.",
         });
+      }
 
-        if (requestsToday >= dailyLimit) {
-          return res.status(403).json({
-            message: `Daily request limit of ${dailyLimit} reached.`,
-          });
+      /* ---------------------------------------------
+         Validate user ID
+      --------------------------------------------- */
+
+      if (!mongoose.isValidObjectId(toUserId)) {
+        return res.status(400).json({
+          message: "Invalid developer ID.",
+        });
+      }
+
+      if (
+        String(req.user._id) ===
+        String(toUserId)
+      ) {
+        return res.status(400).json({
+          message: "You cannot connect with yourself.",
+        });
+      }
+
+      /* ---------------------------------------------
+         Check target user
+      --------------------------------------------- */
+
+      const targetUser = await User.findOne({
+        _id: toUserId,
+        profileComplete: true,
+      });
+
+      if (!targetUser) {
+        return res.status(404).json({
+          message: "Developer not found.",
+        });
+      }
+
+      /* ---------------------------------------------
+         Check daily limit
+
+         Only "interested" counts as a connection
+         attempt. Passing doesn't consume the limit.
+      --------------------------------------------- */
+
+      if (status === "interested") {
+        let dailyLimit = FREE_DAILY_LIMIT;
+
+        if (req.user.membershipType === "silver") {
+          dailyLimit = SILVER_DAILY_LIMIT;
+        }
+
+        if (req.user.membershipType === "gold") {
+          dailyLimit = Infinity;
+        }
+
+        if (dailyLimit !== Infinity) {
+          const startOfDay = new Date();
+          startOfDay.setHours(0, 0, 0, 0);
+
+          const interestedToday =
+            await ConnectionRequest.countDocuments({
+              fromUserId: req.user._id,
+              status: "interested",
+              createdAt: {
+                $gte: startOfDay,
+              },
+            });
+
+          if (interestedToday >= dailyLimit) {
+            return res.status(403).json({
+              message:
+                req.user.membershipType === "silver"
+                  ? "You've reached your daily connection limit."
+                  : "You've reached today's free connection limit.",
+              code: "DAILY_LIMIT_REACHED",
+              limit: dailyLimit,
+            });
+          }
         }
       }
 
-      const allowedStatus = ["ignored", "interested"];
-      if (!allowedStatus.includes(status)) {
-        return res
-          .status(400)
-          .json({ message: "Invalid status type: " + status });
+      /* ---------------------------------------------
+         Check existing relationship
+      --------------------------------------------- */
+
+      const existingRequest =
+        await ConnectionRequest.findOne({
+          $or: [
+            {
+              fromUserId: req.user._id,
+              toUserId,
+            },
+            {
+              fromUserId: toUserId,
+              toUserId: req.user._id,
+            },
+          ],
+        });
+
+      if (existingRequest) {
+        return res.status(409).json({
+          message:
+            existingRequest.status === "accepted"
+              ? "You're already connected."
+              : "You've already interacted with this developer.",
+          code: "ALREADY_INTERACTED",
+        });
       }
 
-      // Check if receiver exists
-      const toUser = await User.findById(toUserId);
-      if (!toUser) {
-        return res.status(404).json({ message: "User not found" });
-      }
+      /* ---------------------------------------------
+         Create request
+      --------------------------------------------- */
 
-      // Check if request already exists (both directions)
-      const existingConnectRequest = await ConnectionRequest.findOne({
-        $or: [
-          { fromUserId, toUserId },
-          { fromUserId: toUserId, toUserId: fromUserId },
-        ],
-      });
+      const connectionRequest =
+        await ConnectionRequest.create({
+          fromUserId: req.user._id,
+          toUserId,
+          status,
+        });
 
-      if (existingConnectRequest) {
-        return res
-          .status(400)
-          .json({ message: "Connection request already exists" });
-      }
-
-      const connectionRequest = new ConnectionRequest({
-        fromUserId,
-        toUserId,
-        status,
-      });
-
-      const data = await connectionRequest.save();
-
-      // const emailRes= await sendEmail.run("A new friend request from " + req.user.firstName , `${req.user.firstName} is ${status} in ${toUser.firstName}`);
-
-      // console.log(emailRes);
-      try {
-        const emailRes = await sendEmail.run(
-          "A new friend request from " + req.user.firstName,
-          `${req.user.firstName} is ${status} in ${toUser.firstName}`
-        );
-
-        console.log(emailRes);
-      } catch (emailError) {
-        console.error("Email failed:", emailError.message);
-      }
-
-      return res.json({
-        message: `${req.user.firstName} is ${status} in ${toUser.firstName}`,
-        data,
+      return res.status(201).json({
+        message:
+          status === "interested"
+            ? "Connection request sent."
+            : "Developer passed.",
+        data: connectionRequest,
       });
     } catch (err) {
-      return res.status(400).send("ERROR: " + err.message);
+      console.error(
+        "POST /request/send error:",
+        err
+      );
+
+      /*
+        Handles a duplicate created because of
+        simultaneous requests.
+      */
+      if (err.code === 11000) {
+        return res.status(409).json({
+          message:
+            "You've already interacted with this developer.",
+          code: "ALREADY_INTERACTED",
+        });
+      }
+
+      return res.status(500).json({
+        message: "Unable to process connection request.",
+      });
     }
   }
 );
 
-// ======================= REVIEW REQUEST =======================
-// Status: accepted | rejected
-requestRouter.post(
+/* -------------------------------------------------------
+   POST /request/review/:status/:requestId
+------------------------------------------------------- */
+
+router.post(
   "/review/:status/:requestId",
   userAuth,
   async (req, res) => {
     try {
-      const loggedInUser = req.user;
       const { status, requestId } = req.params;
 
-      const allowedStatus = ["accepted", "rejected"];
-      if (!allowedStatus.includes(status)) {
-        return res
-          .status(400)
-          .json({ message: "Status is not allowed" });
+      if (!["accepted", "rejected"].includes(status)) {
+        return res.status(400).json({
+          message: "Invalid review action.",
+        });
       }
 
-      // Only the receiver can review the request
-      const connectionRequest = await ConnectionRequest.findOne({
-        _id: requestId,
-        toUserId: loggedInUser._id,
-        status: "interested",
-      });
-
-      if (!connectionRequest) {
-        return res
-          .status(404)
-          .json({ message: "Connection request not found" });
+      if (!mongoose.isValidObjectId(requestId)) {
+        return res.status(400).json({
+          message: "Invalid request ID.",
+        });
       }
 
-      connectionRequest.status = status;
-      const data = await connectionRequest.save();
+      const request =
+        await ConnectionRequest.findOne({
+          _id: requestId,
+          toUserId: req.user._id,
+          status: "interested",
+        });
 
-      res.json({
-        message: "Connection request " + status,
-        data,
+      if (!request) {
+        return res.status(404).json({
+          message: "Connection request not found.",
+        });
+      }
+
+      request.status = status;
+
+      await request.save();
+
+      return res.status(200).json({
+        message:
+          status === "accepted"
+            ? "Connection accepted."
+            : "Connection request rejected.",
+        data: request,
       });
     } catch (err) {
-      res.status(400).send("ERROR: " + err.message);
+      console.error(
+        "POST /request/review error:",
+        err
+      );
+
+      return res.status(500).json({
+        message:
+          "Unable to process connection request.",
+      });
     }
   }
 );
 
-module.exports = requestRouter;
+module.exports = router;

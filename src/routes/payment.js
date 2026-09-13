@@ -1,34 +1,43 @@
 const express = require("express");
+
 const { userAuth } = require("../middlewares/auth");
-const paymentRouter = express.Router();
 const razorpayInstance = require("../utils/razorpay");
 const Payment = require("../models/payment");
 const User = require("../models/user");
 const { membershipAmount } = require("../utils/constants");
-const {
-  validateWebhookSignature,
-} = require("razorpay/dist/utils/razorpay-utils");
+
+const paymentRouter = express.Router();
+
+
+// CREATE RAZORPAY TEST ORDER
 
 paymentRouter.post("/create", userAuth, async (req, res) => {
   try {
     const { membershipType } = req.body;
+
+    // Validate membership type
+    if (!membershipType || !membershipAmount[membershipType]) {
+      return res.status(400).json({
+        message: "Invalid membership type",
+      });
+    }
+
     const { firstName, lastName, emailId } = req.user;
 
+    // Create Razorpay order
     const order = await razorpayInstance.orders.create({
       amount: membershipAmount[membershipType] * 100,
       currency: "INR",
-      receipt: "receipt#1",
+      receipt: `receipt_${Date.now()}`,
       notes: {
         firstName,
         lastName,
         emailId,
-        membershipType: membershipType,
+        membershipType,
       },
     });
 
-    // Save it in my database
-    console.log(order);
-
+    // Save payment in database
     const payment = new Payment({
       userId: req.user._id,
       orderId: order.id,
@@ -36,100 +45,130 @@ paymentRouter.post("/create", userAuth, async (req, res) => {
       amount: order.amount,
       currency: order.currency,
       receipt: order.receipt,
-      notes: order.notes,
+      notes: {
+        firstName,
+        lastName,
+        membershipType,
+      },
     });
 
-    const savedPayment = await payment.save();
-
-    // Return back my order details to frontend
-    res.json({ ...savedPayment.toJSON(), keyId: process.env.RAZORPAY_KEY_ID });
-  } catch (err) {
-    return res.status(500).json({ msg: err.message });
-  }
-});
-
-paymentRouter.post("/webhook", async (req, res) => {
-  try {
-    console.log("Webhook Called");
-    const webhookSignature = req.get("X-Razorpay-Signature");
-    console.log("Webhook Signature", webhookSignature);
-
-    const isWebhookValid = validateWebhookSignature(
-      JSON.stringify(req.body),
-      webhookSignature,
-      process.env.RAZORPAY_WEBHOOK_SECRET
-    );
-
-    if (!isWebhookValid) {
-      console.log("INvalid Webhook Signature");
-      return res.status(400).json({ msg: "Webhook signature is invalid" });
-    }
-    console.log("Valid Webhook Signature");
-
-    // Udpate my payment Status in DB
-    const paymentDetails = req.body.payload.payment.entity;
-
-    const payment = await Payment.findOne({ orderId: paymentDetails.order_id });
-    payment.status = paymentDetails.status;
     await payment.save();
-    console.log("Payment saved");
 
-    const user = await User.findOne({ _id: payment.userId });
-    user.isPremium = true;
-    user.membershipType = payment.notes.membershipType;
-    console.log("User saved");
+    return res.status(201).json({
+      message: "Payment order created successfully",
+      data: {
+        orderId: order.id,
+        amount: order.amount,
+        currency: order.currency,
+        keyId: process.env.RAZORPAY_KEY_ID,
+      },
+    });
 
-    await user.save();
-
-    // Update the user as premium
-
-    // if (req.body.event == "payment.captured") {
-    // }
-    // if (req.body.event == "payment.failed") {
-    // }
-
-    // return success response to razorpay
-
-    return res.status(200).json({ msg: "Webhook received successfully" });
   } catch (err) {
-    return res.status(500).json({ msg: err.message });
+    console.error("Create payment error:", err);
+
+    return res.status(500).json({
+      message: err.message,
+    });
   }
 });
 
-paymentRouter.get("/premium/verify", userAuth, async (req, res) => {
-  const user = req.user.toJSON();
-  console.log(user);
-  if (user.isPremium) {
-    return res.json({ ...user });
-  }
-  return res.json({ ...user });
-});
+
+// VERIFY PAYMENT AND ACTIVATE PREMIUM
 
 paymentRouter.post("/verify", userAuth, async (req, res) => {
   try {
     const {
-        membershipType,
-        razorpay_payment_id,
-        razorpay_order_id,
-        razorpay_signature,
-      } = req.body;
+      membershipType,
+      razorpay_payment_id,
+      razorpay_order_id,
+      razorpay_signature,
+    } = req.body;
 
-    const user = req.user;
+    // Validate membership type
+    if (!membershipType || !membershipAmount[membershipType]) {
+      return res.status(400).json({
+        message: "Invalid membership type",
+      });
+    }
+
+    // Find payment
+    const payment = await Payment.findOne({
+      orderId: razorpay_order_id,
+      userId: req.user._id,
+    });
+
+    if (!payment) {
+      return res.status(404).json({
+        message: "Payment not found",
+      });
+    }
+
+    // Update payment details
+    payment.paymentId = razorpay_payment_id;
+    payment.status = "paid";
+
+    await payment.save();
+
+    // Activate Premium
+    const user = await User.findById(req.user._id);
+
+    if (!user) {
+      return res.status(404).json({
+        message: "User not found",
+      });
+    }
 
     user.isPremium = true;
     user.membershipType = membershipType;
 
     await user.save();
 
-    res.json({
-      message: "Premium Activated",
-      user,
+    return res.status(200).json({
+      message: "Premium Activated Successfully",
+      data: {
+        user,
+        payment,
+      },
     });
+
   } catch (err) {
-    res.status(500).json({
+    console.error("Verify payment error:", err);
+
+    return res.status(500).json({
       message: err.message,
     });
   }
 });
+
+
+// VERIFY PREMIUM STATUS
+
+paymentRouter.get("/premium/verify", userAuth, async (req, res) => {
+  try {
+    const user = await User.findById(req.user._id);
+
+    if (!user) {
+      return res.status(404).json({
+        message: "User not found",
+      });
+    }
+
+    return res.status(200).json({
+      data: {
+        isPremium: user.isPremium,
+        membershipType: user.membershipType,
+      },
+    });
+
+  } catch (err) {
+    console.error("Premium verification error:", err);
+
+    return res.status(500).json({
+      message: err.message,
+    });
+  }
+});
+
 
 module.exports = paymentRouter;

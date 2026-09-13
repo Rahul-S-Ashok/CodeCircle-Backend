@@ -6,18 +6,24 @@ const connectionRequestSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
       required: true,
+      index: true,
     },
+
     toUserId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
       required: true,
+      index: true,
     },
+
     status: {
       type: String,
-      enum: {
-        values: ["ignored", "interested", "accepted", "rejected"],
-        message: `{VALUE} is incorrect status type`,
-      },
+      enum: [
+        "interested",
+        "ignored",
+        "accepted",
+        "rejected",
+      ],
       required: true,
     },
   },
@@ -26,22 +32,49 @@ const connectionRequestSchema = new mongoose.Schema(
   }
 );
 
-// Compound index to prevent duplicate requests
-connectionRequestSchema.index({ fromUserId: 1, toUserId: 1 });
+/* -------------------------------------------------------
+   Prevent self requests
+------------------------------------------------------- */
 
-// Prevent sending request to yourself
-connectionRequestSchema.pre("save", function (next) {
-  const connectionRequest = this;
-
-  if (connectionRequest.fromUserId.equals(connectionRequest.toUserId)) {
-    throw new Error("Cannot send connection request to yourself");
+connectionRequestSchema.pre("validate", function (next) {
+  if (
+    this.fromUserId &&
+    this.toUserId &&
+    this.fromUserId.equals(this.toUserId)
+  ) {
+    return next(
+      new Error("You cannot send a connection request to yourself.")
+    );
   }
+
   next();
 });
 
-const ConnectionRequest = mongoose.model(
+/* -------------------------------------------------------
+   Indexes
+------------------------------------------------------- */
+
+// Used frequently when checking both directions.
+connectionRequestSchema.index({
+  fromUserId: 1,
+  toUserId: 1,
+});
+
+// Used for received requests.
+connectionRequestSchema.index({
+  toUserId: 1,
+  status: 1,
+  createdAt: -1,
+});
+
+// Used for sent requests.
+connectionRequestSchema.index({
+  fromUserId: 1,
+  status: 1,
+  createdAt: -1,
+});
+
+module.exports = mongoose.model(
   "ConnectionRequest",
   connectionRequestSchema
 );
-
-module.exports = ConnectionRequest;
