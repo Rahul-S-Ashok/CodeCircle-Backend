@@ -11,10 +11,10 @@ const {
   getProjectMessages,
   sendProjectMessage,
   deleteProject,
+  searchProjectUsers,
 } = require("../controllers/projectController");
 
 const projectRouter = express.Router();
-
 
 // ==========================================
 // GET ALL PROJECTS CREATED BY USER
@@ -26,7 +26,6 @@ projectRouter.get(
   getProjects
 );
 
-
 // ==========================================
 // CREATE PROJECT
 // ==========================================
@@ -37,6 +36,16 @@ projectRouter.post(
   createProject
 );
 
+// ==========================================
+// SEARCH USERS FOR PROJECT MEMBERS
+// IMPORTANT: THIS MUST COME BEFORE /:id
+// ==========================================
+
+projectRouter.get(
+  "/users/search",
+  userAuth,
+  searchProjectUsers
+);
 
 // ==========================================
 // GET SINGLE PROJECT
@@ -48,7 +57,6 @@ projectRouter.get(
   getProjectById
 );
 
-
 // ==========================================
 // ADD MEMBER TO PROJECT
 // ==========================================
@@ -58,7 +66,6 @@ projectRouter.post(
   userAuth,
   addProjectMember
 );
-
 
 // ==========================================
 // REMOVE MEMBER
@@ -70,7 +77,6 @@ projectRouter.delete(
   removeProjectMember
 );
 
-
 // ==========================================
 // GET PROJECT CHAT MESSAGES
 // ==========================================
@@ -80,7 +86,6 @@ projectRouter.get(
   userAuth,
   getProjectMessages
 );
-
 
 // ==========================================
 // SEND PROJECT MESSAGE
@@ -92,7 +97,6 @@ projectRouter.post(
   sendProjectMessage
 );
 
-
 // ==========================================
 // DELETE PROJECT
 // ==========================================
@@ -102,6 +106,5 @@ projectRouter.delete(
   userAuth,
   deleteProject
 );
-
 
 module.exports = projectRouter;

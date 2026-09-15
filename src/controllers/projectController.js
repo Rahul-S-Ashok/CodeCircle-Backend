@@ -1,5 +1,6 @@
 const Project = require("../models/project");
 const ProjectMessage = require("../models/projectMessage");
+const User = require("../models/user");
 
 // ==========================================
 // GET PROJECTS
@@ -16,8 +17,14 @@ const getProjects = async (req, res) => {
         { members: userId },
       ],
     })
-      .populate("ownerId", "firstName lastName photoUrl")
-      .populate("members", "firstName lastName photoUrl")
+      .populate(
+        "ownerId",
+        "firstName lastName photoUrl headline"
+      )
+      .populate(
+        "members",
+        "firstName lastName photoUrl headline"
+      )
       .sort({
         createdAt: -1,
       });
@@ -39,7 +46,12 @@ const getProjects = async (req, res) => {
 // ==========================================
 const createProject = async (req, res) => {
   try {
-    const { title, description, tags, lookingFor } = req.body;
+    const {
+      title,
+      description,
+      tags,
+      lookingFor,
+    } = req.body;
 
     if (!title || !title.trim()) {
       return res.status(400).json({
@@ -56,9 +68,16 @@ const createProject = async (req, res) => {
       members: [],
     });
 
-    const populatedProject = await Project.findById(project._id)
-      .populate("ownerId", "firstName lastName photoUrl")
-      .populate("members", "firstName lastName photoUrl");
+    const populatedProject =
+      await Project.findById(project._id)
+        .populate(
+          "ownerId",
+          "firstName lastName photoUrl headline"
+        )
+        .populate(
+          "members",
+          "firstName lastName photoUrl headline"
+        );
 
     res.status(201).json({
       data: populatedProject,
@@ -77,9 +96,16 @@ const createProject = async (req, res) => {
 // ==========================================
 const getProjectById = async (req, res) => {
   try {
-    const project = await Project.findById(req.params.id)
-      .populate("ownerId", "firstName lastName photoUrl")
-      .populate("members", "firstName lastName photoUrl");
+    const project =
+      await Project.findById(req.params.id)
+        .populate(
+          "ownerId",
+          "firstName lastName photoUrl headline"
+        )
+        .populate(
+          "members",
+          "firstName lastName photoUrl headline"
+        );
 
     if (!project) {
       return res.status(404).json({
@@ -87,18 +113,23 @@ const getProjectById = async (req, res) => {
       });
     }
 
-    const userId = req.user._id.toString();
+    const userId =
+      req.user._id.toString();
 
     const isOwner =
-      project.ownerId._id.toString() === userId;
+      project.ownerId._id.toString() ===
+      userId;
 
-    const isMember = project.members.some(
-      (member) => member._id.toString() === userId
-    );
+    const isMember =
+      project.members.some(
+        (member) =>
+          member._id.toString() === userId
+      );
 
     if (!isOwner && !isMember) {
       return res.status(403).json({
-        message: "You are not a member of this project",
+        message:
+          "You are not a member of this project",
       });
     }
 
@@ -106,7 +137,10 @@ const getProjectById = async (req, res) => {
       data: project,
     });
   } catch (err) {
-    console.error("Get project error:", err);
+    console.error(
+      "Get project error:",
+      err
+    );
 
     res.status(400).json({
       message: err.message,
@@ -115,9 +149,70 @@ const getProjectById = async (req, res) => {
 };
 
 // ==========================================
+// SEARCH USERS FOR PROJECT MEMBER
+// ==========================================
+const searchProjectUsers = async (
+  req,
+  res
+) => {
+  try {
+    const query = String(
+      req.query.q || ""
+    ).trim();
+
+    if (!query) {
+      return res.json({
+        data: [],
+      });
+    }
+
+    const users = await User.find({
+      _id: {
+        $ne: req.user._id,
+      },
+
+      $or: [
+        {
+          firstName: {
+            $regex: query,
+            $options: "i",
+          },
+        },
+        {
+          lastName: {
+            $regex: query,
+            $options: "i",
+          },
+        },
+      ],
+    })
+      .select(
+        "firstName lastName photoUrl headline"
+      )
+      .limit(10);
+
+    res.json({
+      data: users,
+    });
+  } catch (err) {
+    console.error(
+      "Search project users error:",
+      err
+    );
+
+    res.status(500).json({
+      message: "Unable to search users",
+    });
+  }
+};
+
+// ==========================================
 // ADD PROJECT MEMBER
 // ==========================================
-const addProjectMember = async (req, res) => {
+const addProjectMember = async (
+  req,
+  res
+) => {
   try {
     const { userId } = req.body;
 
@@ -127,7 +222,8 @@ const addProjectMember = async (req, res) => {
       });
     }
 
-    const project = await Project.findById(req.params.id);
+    const project =
+      await Project.findById(req.params.id);
 
     if (!project) {
       return res.status(404).json({
@@ -141,28 +237,45 @@ const addProjectMember = async (req, res) => {
       req.user._id.toString()
     ) {
       return res.status(403).json({
-        message: "Only project owner can add members",
+        message:
+          "Only project owner can add members",
       });
     }
 
-    // Owner is already part of project
+    // Check that user actually exists
+    const user = await User.findById(
+      userId
+    );
+
+    if (!user) {
+      return res.status(404).json({
+        message: "User not found",
+      });
+    }
+
+    // Owner cannot be added
     if (
       project.ownerId.toString() ===
       userId.toString()
     ) {
       return res.status(400).json({
-        message: "Owner is already part of the project",
+        message:
+          "Owner is already part of the project",
       });
     }
 
-    const alreadyMember = project.members.some(
-      (memberId) =>
-        memberId.toString() === userId.toString()
-    );
+    // Prevent duplicate members
+    const alreadyMember =
+      project.members.some(
+        (memberId) =>
+          memberId.toString() ===
+          userId.toString()
+      );
 
     if (alreadyMember) {
       return res.status(400).json({
-        message: "User is already a member",
+        message:
+          "User is already a member",
       });
     }
 
@@ -170,18 +283,26 @@ const addProjectMember = async (req, res) => {
 
     await project.save();
 
-    const updatedProject = await Project.findById(
-      project._id
-    )
-      .populate("ownerId", "firstName lastName photoUrl")
-      .populate("members", "firstName lastName photoUrl");
+    const updatedProject =
+      await Project.findById(project._id)
+        .populate(
+          "ownerId",
+          "firstName lastName photoUrl headline"
+        )
+        .populate(
+          "members",
+          "firstName lastName photoUrl headline"
+        );
 
     res.json({
       message: "Member added successfully",
       data: updatedProject,
     });
   } catch (err) {
-    console.error("Add member error:", err);
+    console.error(
+      "Add member error:",
+      err
+    );
 
     res.status(400).json({
       message: err.message,
@@ -192,9 +313,13 @@ const addProjectMember = async (req, res) => {
 // ==========================================
 // REMOVE PROJECT MEMBER
 // ==========================================
-const removeProjectMember = async (req, res) => {
+const removeProjectMember = async (
+  req,
+  res
+) => {
   try {
-    const project = await Project.findById(req.params.id);
+    const project =
+      await Project.findById(req.params.id);
 
     if (!project) {
       return res.status(404).json({
@@ -208,30 +333,41 @@ const removeProjectMember = async (req, res) => {
       req.user._id.toString()
     ) {
       return res.status(403).json({
-        message: "Only project owner can remove members",
+        message:
+          "Only project owner can remove members",
       });
     }
 
-    project.members = project.members.filter(
-      (memberId) =>
-        memberId.toString() !==
-        req.params.memberId.toString()
-    );
+    project.members =
+      project.members.filter(
+        (memberId) =>
+          memberId.toString() !==
+          req.params.memberId.toString()
+      );
 
     await project.save();
 
-    const updatedProject = await Project.findById(
-      project._id
-    )
-      .populate("ownerId", "firstName lastName photoUrl")
-      .populate("members", "firstName lastName photoUrl");
+    const updatedProject =
+      await Project.findById(project._id)
+        .populate(
+          "ownerId",
+          "firstName lastName photoUrl headline"
+        )
+        .populate(
+          "members",
+          "firstName lastName photoUrl headline"
+        );
 
     res.json({
-      message: "Member removed successfully",
+      message:
+        "Member removed successfully",
       data: updatedProject,
     });
   } catch (err) {
-    console.error("Remove member error:", err);
+    console.error(
+      "Remove member error:",
+      err
+    );
 
     res.status(400).json({
       message: err.message,
@@ -242,9 +378,13 @@ const removeProjectMember = async (req, res) => {
 // ==========================================
 // GET PROJECT MESSAGES
 // ==========================================
-const getProjectMessages = async (req, res) => {
+const getProjectMessages = async (
+  req,
+  res
+) => {
   try {
-    const project = await Project.findById(req.params.id);
+    const project =
+      await Project.findById(req.params.id);
 
     if (!project) {
       return res.status(404).json({
@@ -252,38 +392,46 @@ const getProjectMessages = async (req, res) => {
       });
     }
 
-    const userId = req.user._id.toString();
+    const userId =
+      req.user._id.toString();
 
     const isOwner =
-      project.ownerId.toString() === userId;
+      project.ownerId.toString() ===
+      userId;
 
-    const isMember = project.members.some(
-      (memberId) =>
-        memberId.toString() === userId
-    );
+    const isMember =
+      project.members.some(
+        (memberId) =>
+          memberId.toString() === userId
+      );
 
     if (!isOwner && !isMember) {
       return res.status(403).json({
-        message: "You are not a project member",
+        message:
+          "You are not a project member",
       });
     }
 
-    const messages = await ProjectMessage.find({
-      projectId: project._id,
-    })
-      .populate(
-        "senderId",
-        "firstName lastName photoUrl"
-      )
-      .sort({
-        createdAt: 1,
-      });
+    const messages =
+      await ProjectMessage.find({
+        projectId: project._id,
+      })
+        .populate(
+          "senderId",
+          "firstName lastName photoUrl"
+        )
+        .sort({
+          createdAt: 1,
+        });
 
     res.json({
       data: messages,
     });
   } catch (err) {
-    console.error("Get messages error:", err);
+    console.error(
+      "Get messages error:",
+      err
+    );
 
     res.status(400).json({
       message: err.message,
@@ -294,7 +442,10 @@ const getProjectMessages = async (req, res) => {
 // ==========================================
 // SEND PROJECT MESSAGE
 // ==========================================
-const sendProjectMessage = async (req, res) => {
+const sendProjectMessage = async (
+  req,
+  res
+) => {
   try {
     const { text } = req.body;
 
@@ -304,7 +455,8 @@ const sendProjectMessage = async (req, res) => {
       });
     }
 
-    const project = await Project.findById(req.params.id);
+    const project =
+      await Project.findById(req.params.id);
 
     if (!project) {
       return res.status(404).json({
@@ -312,40 +464,49 @@ const sendProjectMessage = async (req, res) => {
       });
     }
 
-    const userId = req.user._id.toString();
+    const userId =
+      req.user._id.toString();
 
     const isOwner =
-      project.ownerId.toString() === userId;
+      project.ownerId.toString() ===
+      userId;
 
-    const isMember = project.members.some(
-      (memberId) =>
-        memberId.toString() === userId
-    );
+    const isMember =
+      project.members.some(
+        (memberId) =>
+          memberId.toString() === userId
+      );
 
     if (!isOwner && !isMember) {
       return res.status(403).json({
-        message: "You are not a project member",
+        message:
+          "You are not a project member",
       });
     }
 
-    const message = await ProjectMessage.create({
-      projectId: project._id,
-      senderId: req.user._id,
-      text: text.trim(),
-    });
+    const message =
+      await ProjectMessage.create({
+        projectId: project._id,
+        senderId: req.user._id,
+        text: text.trim(),
+      });
 
     const populatedMessage =
-      await ProjectMessage.findById(message._id)
-        .populate(
-          "senderId",
-          "firstName lastName photoUrl"
-        );
+      await ProjectMessage.findById(
+        message._id
+      ).populate(
+        "senderId",
+        "firstName lastName photoUrl"
+      );
 
     res.status(201).json({
       data: populatedMessage,
     });
   } catch (err) {
-    console.error("Send message error:", err);
+    console.error(
+      "Send message error:",
+      err
+    );
 
     res.status(400).json({
       message: err.message,
@@ -356,29 +517,37 @@ const sendProjectMessage = async (req, res) => {
 // ==========================================
 // DELETE PROJECT
 // ==========================================
-const deleteProject = async (req, res) => {
+const deleteProject = async (
+  req,
+  res
+) => {
   try {
-    const project = await Project.findOneAndDelete({
-      _id: req.params.id,
-      ownerId: req.user._id,
-    });
+    const project =
+      await Project.findOneAndDelete({
+        _id: req.params.id,
+        ownerId: req.user._id,
+      });
 
     if (!project) {
       return res.status(404).json({
-        message: "Project not found or you are not the owner",
+        message:
+          "Project not found or you are not the owner",
       });
     }
 
-    // Delete all project messages
     await ProjectMessage.deleteMany({
       projectId: project._id,
     });
 
     res.json({
-      message: "Project deleted successfully",
+      message:
+        "Project deleted successfully",
     });
   } catch (err) {
-    console.error("Delete project error:", err);
+    console.error(
+      "Delete project error:",
+      err
+    );
 
     res.status(400).json({
       message: err.message,
@@ -390,6 +559,7 @@ module.exports = {
   getProjects,
   createProject,
   getProjectById,
+  searchProjectUsers,
   addProjectMember,
   removeProjectMember,
   getProjectMessages,
