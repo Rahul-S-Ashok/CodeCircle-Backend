@@ -54,6 +54,7 @@ router.post("/signup", async (req, res) => {
     return res.status(201).json({
       message: "Account created successfully.",
       data: safeUser(user),
+      token,
     });
   } catch (err) {
     console.error("Signup error:", err);
@@ -123,6 +124,7 @@ router.post("/login", async (req, res) => {
     return res.status(200).json({
       message: "Login successful.",
       data: safeUser(user),
+      token,
     });
   } catch (err) {
     console.error("Login error:", err);
@@ -207,6 +209,7 @@ router.post("/google", async (req, res) => {
       return res.status(200).json({
         message: "Google login successful.",
         data: safeUser(user),
+        token,
       });
     }
 
@@ -262,6 +265,7 @@ router.post("/google", async (req, res) => {
     return res.status(201).json({
       message: "Google account created successfully.",
       data: safeUser(user),
+      token,
     });
   } catch (err) {
     console.error("Google authentication error:", err);

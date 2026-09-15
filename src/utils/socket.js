@@ -142,7 +142,7 @@ const authenticateSocket = async (socket, next) => {
           decodeURIComponent(value);
       });
 
-    const token = cookies.token;
+    const token = socket.handshake.auth?.token || cookies.token;
 
     if (!token) {
       return next(
